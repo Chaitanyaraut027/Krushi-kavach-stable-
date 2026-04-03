@@ -40,9 +40,29 @@ const Schemes = () => {
             const res = await schemeAPI.getRecommendations(lang);
 
             // Enhance with specific Unsplash images using keywords from AI
+            // Local high-quality generated assets for primary schemes
+            const schemeAssetMap = {
+                'pm-kisan': '/images/schemes/pm-kisan.png',
+                'pmfby': '/images/schemes/pmfby.png',
+                'pm-kusum': '/images/schemes/pm-kusum.png',
+                'soil-health-card': '/images/schemes/soil-health.png',
+                'soil-health': '/images/schemes/soil-health.png',
+                'kcc': '/images/schemes/kcc.png',
+                'kisan-credit-card': '/images/schemes/kcc.png',
+                'pkvy': '/images/schemes/pkvy.png',
+                'paramparagat-krishi-vikas-yojana': '/images/schemes/pkvy.png',
+                'aif': '/images/schemes/aif.png',
+                'agriculture-infrastructure-fund': '/images/schemes/aif.png'
+            };
+
             const recommendationsWithImages = await Promise.all(
                 res.data.recommendations.map(async (s) => {
-                    // Use imageKeywords if available, otherwise fallback to title
+                    // 1. Try local premium asset first
+                    if (schemeAssetMap[s.id.toLowerCase()]) {
+                        return { ...s, displayImage: schemeAssetMap[s.id.toLowerCase()] };
+                    }
+
+                    // 2. Fallback to Unsplash with AI-curated keywords
                     const searchQuery = s.imageKeywords || `${s.title} agriculture india`;
                     const img = await mediaAPI.searchImages(searchQuery);
                     return { ...s, displayImage: img };
@@ -107,9 +127,9 @@ const Schemes = () => {
                     <img
                         src={scheme.displayImage}
                         alt={scheme.title}
-                        className="w-full h-full object-cover"
+                        className="w-full h-full object-cover grayscale-[0.2] group-hover:grayscale-0 transition-all duration-700"
                     />
-                    <div className="absolute inset-0 bg-gradient-to-t from-[var(--bg-card-solid)] via-[var(--bg-card-solid)]/40 to-transparent" />
+                    <div className="absolute inset-0 bg-gradient-to-t from-[var(--bg-card-solid)] via-[var(--bg-card-solid)]/20 to-transparent" />
                     <div className="absolute bottom-10 left-6 right-6 sm:left-12 sm:right-12">
                         <div className="flex flex-wrap gap-2 mb-4">
                             {scheme.tags.map((tag, i) => (
@@ -118,7 +138,7 @@ const Schemes = () => {
                                 </span>
                             ))}
                         </div>
-                        <h1 className="text-3xl sm:text-5xl font-black text-white leading-tight">
+                        <h1 className="text-3xl sm:text-5xl font-black text-white leading-tight drop-shadow-2xl">
                             {scheme.title}
                         </h1>
                     </div>
@@ -328,7 +348,7 @@ const Schemes = () => {
                                         <img
                                             src={scheme.displayImage}
                                             alt={scheme.title}
-                                            className="w-full h-full object-cover transition-transform duration-1000 group-hover:scale-110"
+                                            className="w-full h-full object-cover transition-transform duration-1000 group-hover:scale-110 grayscale-[0.3] group-hover:grayscale-0"
                                         />
                                         <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/20 to-transparent" />
                                         <div className="absolute top-5 left-5">
@@ -337,7 +357,7 @@ const Schemes = () => {
                                             </span>
                                         </div>
                                         <div className="absolute bottom-6 left-6 right-6">
-                                            <h3 className="text-xl font-black text-white leading-tight drop-shadow-md">
+                                            <h3 className="text-2xl font-black text-white leading-tight drop-shadow-lg uppercase tracking-tight">
                                                 {scheme.title}
                                             </h3>
                                         </div>

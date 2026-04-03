@@ -3,12 +3,12 @@ uvicorn>=0.29.0
 ultralytics>=8.2.0
 pillow>=10.0.0
 python-multipart>=0.0.9
-torch
-torchvision
-transformers
-sentence-transformers
-youtube-search-python
-google-api-python-client
-requests
-beautifulsoup4
-
+<<<<<<< HEAD
+youtube-search-python>=1.6.6
+torch>=2.0.0
+torchvision>=0.15.0
+groq>=1.0.0
+python-dotenv>=1.0.0
+httpx==0.24.1
+=======
+>>>>>>> 8f6fab5595fed690a61b9c83b4ee19fcadd3f78f

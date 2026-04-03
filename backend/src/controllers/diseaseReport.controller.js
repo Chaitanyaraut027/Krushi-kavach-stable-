@@ -137,47 +137,30 @@ export const detectDiseaseML = asyncHandler(async (req, res) => {
     let isAiAnalyzed = false;
 
     // --- Phase 1: Local ML Server (Fast) ---
-    // Only try local ML if it's a supported crop to save time/resources
-    if (SUPPORTED_CROPS.includes(normalizedCrop)) {
-      try {
-        const mlResponse = await requestPrediction({
-          buffer: req.file.buffer,
-          originalName: req.file.originalname,
-          mimeType: req.file.mimetype,
-          cropName: normalizedCrop,
-        });
-        mlData = mlResponse.data;
-        prediction = mlData.predicted_class || mlData.class || mlData.disease || "Unknown";
-        let conf = parseFloat(mlData.confidence || 0);
-        confidence = conf <= 1 ? (conf * 100) : conf;
-      } catch (err) {
-        console.warn("[ML] Local server unavailable or failed:", err.message);
-      }
+    // Now always calling the ML server because it handles all crops via 
+    // the three supported models (YOLO + MobileNetV2 + EfficientNet)
+    try {
+      const mlResponse = await requestPrediction({
+        buffer: req.file.buffer,
+        originalName: req.file.originalname,
+        mimeType: req.file.mimetype,
+        cropName: normalizedCrop,
+      });
+      mlData = mlResponse.data;
+      prediction = mlData.predicted_class || mlData.class || mlData.disease || "Unknown";
+      let conf = parseFloat(mlData.confidence || 0);
+      confidence = conf <= 1 ? (conf * 100) : conf;
+    } catch (err) {
+      console.warn("[ML] Local server unavailable or failed:", err.message);
     }
 
     // --- Phase 2: AI Vision Fallback (Gemini/Groq) ---
-    // Trigger if: low confidence, unknown result, or unsupported crop (like Corn)
+    // DISABLED as per user request to "use only three models"
+    /*
     if (confidence < 50 || prediction === "Unknown" || !SUPPORTED_CROPS.includes(normalizedCrop)) {
-      console.log(`[*] Low confidence (${confidence}%) or unsupported crop. Triggering AI Vision analysis...`);
-      try {
-        // We need a path for analyzeCropDisease, so we save temp or use req.file
-        // Since analyzeCropDisease expects an array of file objects with .path, we create a temporary one
-        const tempPath = `public/uploads/temp_${Date.now()}.jpg`;
-        fs.writeFileSync(tempPath, req.file.buffer);
-
-        const aiAnalysis = await analyzeCropDisease([{ path: tempPath }], { cropName: normalizedCrop }, req.user.language || "en");
-
-        prediction = aiAnalysis.detectedDisease;
-        confidence = 95.0; // High confidence from LLM
-        mlData.details = { diagnosis: aiAnalysis.diagnosis, recommendation: aiAnalysis.recommendation };
-        isAiAnalyzed = true;
-
-        // Cleanup temp file
-        fs.unlinkSync(tempPath);
-      } catch (aiErr) {
-        console.error("[AI] Vision analysis failed:", aiErr.message);
-      }
+      ...
     }
+    */
 
     // Normalize confidence to 2 decimals
     confidence = Number(confidence.toFixed(2));
@@ -293,59 +276,39 @@ export const identifyCropML = asyncHandler(async (req, res) => {
   if (!req.file) return res.status(400).json({ message: "Please upload an image." });
 
   try {
-    console.log(`[*] Sending ID request to Gemini AI for superior accuracy`);
-    const aiResult = await identifyCropWithAI(req.file.buffer, req.file.mimetype);
+    // Priority: Local ML Server (using the 3 allowed models)
+    console.log(`[*] Sending ID request to local ML Server: ${ML_SERVER_URL}/identify-crop`);
+    const formData = new FormData();
+    formData.append("file", req.file.buffer, {
+      filename: req.file.originalname || "upload.jpg",
+      contentType: req.file.mimetype || "image/jpeg",
+    });
 
-    // For debugging and tracking
-    console.log(`[+] AI Result: Relevant=${aiResult.relevant}, Crop=${aiResult.detectedCrop} (${aiResult.confidence}%)`);
+    const mlResponse = await axios.post(`${ML_SERVER_URL}/identify-crop`, formData, {
+      headers: formData.getHeaders(),
+      timeout: 10000,
+    });
 
-    // Normalize detected crop name to match frontend IDs
-    if (aiResult.detectedCrop) {
-      aiResult.detectedCrop = aiResult.detectedCrop
+    let resData = mlResponse.data;
+    if (resData.detectedCrop) {
+      resData.detectedCrop = resData.detectedCrop
         .replace(/_\(maize\)/i, '')
         .replace(/,.*$/i, '')
         .replace(/_/g, ' ')
-        .split(' ')[0]; // Take first word (e.g. "Corn" from "Corn (maize)")
-
-      // Capitalize
-      aiResult.detectedCrop = aiResult.detectedCrop.charAt(0).toUpperCase() + aiResult.detectedCrop.slice(1).toLowerCase();
+        .split(' ')[0];
+      resData.detectedCrop = resData.detectedCrop.charAt(0).toUpperCase() + resData.detectedCrop.slice(1).toLowerCase();
     }
 
-    res.json(aiResult);
+    res.json(resData);
   } catch (error) {
-    console.error("AI Identification error:", error.message);
+    console.error("Local ML Identification failed:", error.message);
 
-    // Fallback to local ML server if Gemini fails
-    try {
-      console.log(`[*] Falling back to local ML Server: ${ML_SERVER_URL}/identify-crop`);
-      const formData = new FormData();
-      formData.append("file", req.file.buffer, {
-        filename: req.file.originalname || "upload.jpg",
-        contentType: req.file.mimetype || "image/jpeg",
-      });
-
-      const mlResponse = await axios.post(`${ML_SERVER_URL}/identify-crop`, formData, {
-        headers: formData.getHeaders(),
-        timeout: 10000,
-      });
-
-      let resData = mlResponse.data;
-      if (resData.detectedCrop) {
-        resData.detectedCrop = resData.detectedCrop
-          .replace(/_\(maize\)/i, '')
-          .replace(/,.*$/i, '')
-          .replace(/_/g, ' ')
-          .split(' ')[0];
-        resData.detectedCrop = resData.detectedCrop.charAt(0).toUpperCase() + resData.detectedCrop.slice(1).toLowerCase();
-      }
-
-      res.json(resData);
-    } catch (fallbackError) {
-      res.status(500).json({
-        message: "Crop identification failed",
-        error: fallbackError.message,
-        primaryError: error.message
-      });
-    }
+    // Fallback to Gemini only if absolutely necessary, but we might want to avoid it entirely
+    // to follow the "only three models" rule. For now, we'll keep it as a last-resort error handler
+    // but the primary path is now local ML.
+    res.status(500).json({
+      message: "Crop identification failed",
+      error: error.message
+    });
   }
 });

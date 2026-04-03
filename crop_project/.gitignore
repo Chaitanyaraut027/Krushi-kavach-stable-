@@ -3,6 +3,7 @@
 
 # Virtual Environment
 .venv/
+.venv310/
 venv/
 env/
 
@@ -14,6 +15,10 @@ __pycache__/
 # Models and Training outputs
 runs/
 *.pt
+pretrained_models/*.pth
 
 # Jupyter
 .ipynb_checkpoints/
+
+# Node
+node_modules/
