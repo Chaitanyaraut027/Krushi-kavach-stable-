@@ -30,24 +30,31 @@ const app = express();
 
 // --- Allowed origins for CORS ---
 const allowedOrigins = [
+  process.env.CLIENT_URL,
   'http://localhost:3000',
   'http://localhost:3001',
   'http://localhost:5173',
   'http://localhost:5174',
   'https://krishi-kavach.netlify.app',
-  'https://krishi-kavach.netlify.app/',
   'https://krushikavach.netlify.app',
-  'https://krushikavach.netlify.app/'
-];
+].filter(Boolean);
 
 // --- Core Middleware ---
 app.use(helmet());
 app.use(cors({
   origin: function (origin, callback) {
-    // allow requests with no origin (e.g., Postman)
+    // allow requests with no origin (e.g., Postman, mobile)
     if (!origin) return callback(null, true);
 
-    if (allowedOrigins.indexOf(origin) === -1) {
+    const cleanOrigin = origin.replace(/\/+$/, '');
+    const isAllowed =
+      allowedOrigins.some(o => o.replace(/\/+$/, '') === cleanOrigin) ||
+      cleanOrigin.includes('localhost') ||
+      cleanOrigin.endsWith('.vercel.app') ||
+      cleanOrigin.endsWith('.netlify.app') ||
+      cleanOrigin.endsWith('.onrender.com');
+
+    if (!isAllowed) {
       const msg = `CORS policy does not allow access from ${origin}`;
       return callback(new Error(msg), false);
     }

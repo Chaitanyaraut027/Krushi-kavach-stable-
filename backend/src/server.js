@@ -37,14 +37,17 @@ const startServer = async () => {
     // --- Socket.io Integration ---
     const io = new Server(server, {
       cors: {
-        origin: [
-          'http://localhost:3000',
-          'http://localhost:3001',
-          'https://krushikavach.netlify.app',
-          'https://krushikavach.netlify.app/',
-          'https://krishi-kavach.netlify.app',
-          'https://krishi-kavach.netlify.app/'
-        ],
+        origin: (origin, callback) => {
+          if (!origin) return callback(null, true);
+          const clean = origin.replace(/\/+$/, '');
+          const isAllowed =
+            clean.includes('localhost') ||
+            clean.endsWith('.vercel.app') ||
+            clean.endsWith('.netlify.app') ||
+            clean.endsWith('.onrender.com') ||
+            (process.env.CLIENT_URL && clean === process.env.CLIENT_URL.replace(/\/+$/, ''));
+          callback(null, isAllowed);
+        },
         credentials: true
       }
     });
