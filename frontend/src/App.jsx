@@ -2,7 +2,6 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import ProtectedRoute from './components/ProtectedRoute';
 import Navbar from './components/Navbar';
 import AIChatbot from './components/AIChatbot';
-import FarmInfoModal from './components/FarmInfoModal';
 
 // Pages
 import Home from './pages/Home';
@@ -66,8 +65,6 @@ function App() {
 
         {/* Global AI Chatbot — available on every page */}
         <AIChatbot />
-        {/* Onboarding for Farmers */}
-        <FarmInfoModal />
       </div>
     </Router>
   );
