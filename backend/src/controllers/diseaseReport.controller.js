@@ -22,7 +22,7 @@ const requestPrediction = async ({ buffer, originalName, mimeType, cropName }) =
 
   return axios.post(`${getMlServerUrl()}/predict`, formData, {
     headers: formData.getHeaders(),
-    timeout: 30000,
+    timeout: 60000,
   });
 };
 
@@ -207,7 +207,7 @@ export const identifyCropML = asyncHandler(async (req, res) => {
 
     const mlResponse = await axios.post(`${getMlServerUrl()}/identify-crop`, formData, {
       headers: formData.getHeaders(),
-      timeout: 10000,
+      timeout: 60000,
     });
 
     let resData = mlResponse.data;
@@ -222,10 +222,12 @@ export const identifyCropML = asyncHandler(async (req, res) => {
 
     res.json(resData);
   } catch (error) {
-    console.error("Crop identification failed:", error.message);
-    res.status(500).json({
-      message: "Crop identification failed",
-      error: error.message
+    console.warn("Crop identification fallback:", error.message);
+    res.json({
+      relevant: true,
+      detectedCrop: null,
+      confidence: 0,
+      message: "Could not auto-identify crop. Please select your crop manually."
     });
   }
 });
