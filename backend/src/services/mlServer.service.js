@@ -11,12 +11,12 @@ import axios from "axios";
  * In development: run `python app.py` inside crop_project/
  *   ML server will be available at http://localhost:8000
  */
-const ML_SERVER_URL = process.env.ML_SERVER_URL || "http://localhost:8000";
+const getMlServerUrl = () => process.env.ML_SERVER_URL || "http://localhost:8000";
 
 // ── 1. Health Check ─────────────────────────────────────────────────────────
 export const checkMLServerStatus = async () => {
   try {
-    const res = await axios.get(`${ML_SERVER_URL}/health`, { timeout: 5000 });
+    const res = await axios.get(`${getMlServerUrl()}/health`, { timeout: 8000 });
     const status = String(res.data?.status || "").toLowerCase();
     return status.includes("running");
   } catch {
@@ -37,7 +37,8 @@ export const waitForMLServer = async (maxWait = 10000) => {
 
 // ── 3. Start Check (for local dev only) ────────────────────────────────────
 export const startMLServer = async () => {
-  console.log("[ML] Checking ML server at:", ML_SERVER_URL);
+  const url = getMlServerUrl();
+  console.log("[ML] Checking ML server at:", url);
   const ready = await waitForMLServer(10000);
   if (!ready) {
     throw new Error(
@@ -46,14 +47,14 @@ export const startMLServer = async () => {
       "For production: set ML_SERVER_URL to your Render URL"
     );
   }
-  console.log("[ML] ML server is ready at:", ML_SERVER_URL);
+  console.log("[ML] ML server is ready at:", url);
 };
 
 // ── 4. Run Prediction (Node → FastAPI → result) ─────────────────────────────
 export const runPrediction = async (imageBase64) => {
   try {
     const res = await axios.post(
-      `${ML_SERVER_URL}/predict`,
+      `${getMlServerUrl()}/predict`,
       { image: imageBase64 },
       { timeout: 30000 }
     );

@@ -9,7 +9,7 @@ import axios from "axios";
 import FormData from "form-data";
 
 // ML server URL (local or Render hosted)
-const ML_SERVER_URL = process.env.ML_SERVER_URL || "http://localhost:8000";
+const getMlServerUrl = () => process.env.ML_SERVER_URL || "http://localhost:8000";
 
 // Forward prediction request to FastAPI ML server
 const requestPrediction = async ({ buffer, originalName, mimeType, cropName }) => {
@@ -20,7 +20,7 @@ const requestPrediction = async ({ buffer, originalName, mimeType, cropName }) =
   });
   if (cropName) formData.append("crop", cropName);
 
-  return axios.post(`${ML_SERVER_URL}/predict`, formData, {
+  return axios.post(`${getMlServerUrl()}/predict`, formData, {
     headers: formData.getHeaders(),
     timeout: 30000,
   });
@@ -205,7 +205,7 @@ export const identifyCropML = asyncHandler(async (req, res) => {
       contentType: req.file.mimetype || "image/jpeg",
     });
 
-    const mlResponse = await axios.post(`${ML_SERVER_URL}/identify-crop`, formData, {
+    const mlResponse = await axios.post(`${getMlServerUrl()}/identify-crop`, formData, {
       headers: formData.getHeaders(),
       timeout: 10000,
     });
