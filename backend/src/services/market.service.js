@@ -1,58 +1,20 @@
 import MarketPrice from '../models/marketPrice.model.js';
-import ProcessingCenter from '../models/processingCenter.model.js';
-import { getMarketPrices } from './gemini.service.js';
-import { fetchNearbyFacilities } from './places.service.js';
 import { scrapeMarketPrices } from './scraper.service.js';
-// ── Daily scrape cycle for facility market prices ──────────────────────────────
+
+// ── Daily scrape cycle for mandi market prices ──────────────────────────────
 export const runScrapeCycle = async () => {
-    console.log('[Market] Starting facility price and location scrape cycle...');
-    let updatedCount = 0;
+    console.log('[Market] Starting commodity price scrape cycle...');
     const errors = [];
 
     try {
-        // 1. Fetch real-time agricultural facilities from Google Places (Kolhapur Region as base) 
-        // Note: Coordinates for Kolhapur=16.7050, 74.2433
-        console.log('[Market] Fetching real facilities from Google Places...');
-        const realFacilities = await fetchNearbyFacilities(16.7050, 74.2433, 40000); // 40km radius
-        console.log(`[Market] Discovered/Updated ${realFacilities?.length || 0} real facilities.`);
-
-        // 2. Run real Agmarknet scraper for global market prices
+        // Run Agmarknet and mandi scraper for key agricultural commodities
         console.log('[Market] Running real-time Agmarknet and mandi scraper...');
         const scrapeResults = await scrapeMarketPrices(['Cotton', 'Soybean', 'Sugar', 'Grapes', 'Onion', 'Turmeric', 'Jaggery']);
         console.log(`[Market] Mandi prices updated for ${scrapeResults?.count || 0} commodities.`);
 
-        // 3. Update existing ADMIN/Manual facilities with latest AI/real-time regional prices 
-        // to ensure even manual entries have fresh market data
-        const facilities = await ProcessingCenter.find({ source: 'ADMIN' });
-
-        for (const facility of facilities) {
-            try {
-                // Get prices relevant to that facility's specific city context
-                const crops = ['Soybean', 'Cotton', 'Wheat', 'Onion'];
-                const priceData = await getMarketPrices(crops, null, facility.city || 'Nashik');
-
-                if (priceData && priceData.localMarkets && priceData.localMarkets.length > 0) {
-                    const mappedPrices = priceData.localMarkets.map(p => ({
-                        crop: p.commodity || 'Soybean',
-                        price: p.modalPrice || p.price || 4000,
-                        unit: 'quintal',
-                        date: new Date()
-                    }));
-
-                    facility.marketPrices = mappedPrices;
-                    facility.lastUpdated = new Date();
-                    await facility.save();
-                    updatedCount++;
-                }
-            } catch (err) {
-                console.error(`[Market] Failed to update ${facility.name}:`, err.message);
-                errors.push({ facility: facility.name, error: err.message });
-            }
-        }
-
-        return { saved: updatedCount, realTimeFacilities: realFacilities?.length || 0, scrapeResults, errors };
+        return { saved: scrapeResults?.count || 0, scrapeResults, errors };
     } catch (err) {
-        console.error('[Market] Scrape cycle critical failure:', err.message);
+        console.error('[Market] Scrape cycle failure:', err.message);
         throw err;
     }
 };
