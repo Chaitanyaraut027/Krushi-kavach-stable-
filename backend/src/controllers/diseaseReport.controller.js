@@ -3,31 +3,21 @@ import DiseaseReport from "../models/diseaseReport.model.js";
 import Crop from "../models/crop.model.js";
 import Media from "../models/media.model.js";
 import { uploadToCloudinary } from "../services/cloudinary.service.js";
-import { analyzeCropDisease, identifyCropWithAI } from "../services/diseaseDetection.service.js";
+import { analyzeCropDisease } from "../services/diseaseDetection.service.js";
 import { sendWhatsAppReport } from "../services/whatsapp.service.js";
 import axios from "axios";
 import FormData from "form-data";
-import fs from "fs";
 
-// --------------------------------------------------------------
-// 🏠 LOCAL ML SERVER CONFIG (FastAPI running app.py on port 8000)
-// --------------------------------------------------------------
+// ML server URL (local or Render hosted)
 const ML_SERVER_URL = process.env.ML_SERVER_URL || "http://localhost:8000";
 
-// Supported crops for the new model
-const SUPPORTED_CROPS = ["Banana", "Chilli", "Radish", "Groundnut", "Cauliflower"];
-
-// --------------------------------------------------------------
-// ✔ PREDICTION REQUEST TO LOCAL FASTAPI ML SERVER
-// --------------------------------------------------------------
+// Forward prediction request to FastAPI ML server
 const requestPrediction = async ({ buffer, originalName, mimeType, cropName }) => {
   const formData = new FormData();
-
   formData.append("file", buffer, {
     filename: originalName || "upload.jpg",
     contentType: mimeType || "image/jpeg",
   });
-
   if (cropName) formData.append("crop", cropName);
 
   return axios.post(`${ML_SERVER_URL}/predict`, formData, {
@@ -37,8 +27,7 @@ const requestPrediction = async ({ buffer, originalName, mimeType, cropName }) =
 };
 
 // --------------------------------------------------------------
-// ✔ CREATE REPORT USING GEMINI (for detailed analysis after ML)
-// --------------------------------------------------------------
+// Create detailed report with images and Gemini analysis
 export const createReport = asyncHandler(async (req, res) => {
   const { cropId, reportLanguage } = req.body;
 
@@ -49,7 +38,7 @@ export const createReport = asyncHandler(async (req, res) => {
     return res.status(400).json({ message: "Please upload images." });
   }
 
-  // Upload images
+  // Upload images to Cloudinary
   const mediaIds = [];
   for (const file of req.files) {
     const upload = await uploadToCloudinary(file, "disease-reports");
@@ -57,7 +46,7 @@ export const createReport = asyncHandler(async (req, res) => {
     mediaIds.push(mediaDoc._id);
   }
 
-  // Gemini analysis
+  // Gemini disease analysis
   const analysis = await analyzeCropDisease(
     req.files,
     { cropName: crop.name, cropVariety: crop.variety },
@@ -76,9 +65,7 @@ export const createReport = asyncHandler(async (req, res) => {
   res.status(201).json({ message: "Report created", report });
 });
 
-// --------------------------------------------------------------
-// ✔ GET REPORTS OF FARMER
-// --------------------------------------------------------------
+// Fetch reports submitted by the logged-in farmer
 export const getFarmerReports = asyncHandler(async (req, res) => {
   const reports = await DiseaseReport.find({ farmer: req.user.id })
     .populate("crop images assignedAgronomist");
@@ -86,9 +73,7 @@ export const getFarmerReports = asyncHandler(async (req, res) => {
   res.json(reports);
 });
 
-// --------------------------------------------------------------
-// ✔ MARK REPORT AS TREATED
-// --------------------------------------------------------------
+// Mark report status as treated
 export const markReportTreated = asyncHandler(async (req, res) => {
   const report = await DiseaseReport.findById(req.params.id);
 
@@ -102,9 +87,7 @@ export const markReportTreated = asyncHandler(async (req, res) => {
   res.json({ message: "Report marked as treated", report });
 });
 
-// --------------------------------------------------------------
-// ✔ DELETE REPORT
-// --------------------------------------------------------------
+// Delete a disease report
 export const deleteReport = asyncHandler(async (req, res) => {
   const report = await DiseaseReport.findById(req.params.id);
 
@@ -117,17 +100,13 @@ export const deleteReport = asyncHandler(async (req, res) => {
   res.json({ message: "Report deleted successfully" });
 });
 
-// --------------------------------------------------------------
-// 🌾 DISEASE DETECTION USING LOCAL YOLO MODEL
-// Supported: Banana, Chilli, Radish, Groundnut, Cauliflower
-// --------------------------------------------------------------
+// Detect disease via ONNX ML server
 export const detectDiseaseML = asyncHandler(async (req, res) => {
   const { cropName } = req.body;
 
   if (!req.file) return res.status(400).json({ message: "Please upload an image." });
   if (!cropName) return res.status(400).json({ message: "Provide crop name." });
 
-  // No rigid validation here, let the ML server handle crop-specific logic
   const normalizedCrop = cropName;
 
   try {
@@ -136,9 +115,7 @@ export const detectDiseaseML = asyncHandler(async (req, res) => {
     let mlData = {};
     let isAiAnalyzed = false;
 
-    // --- Phase 1: Local ML Server (Fast) ---
-    // Now always calling the ML server because it handles all crops via 
-    // the three supported models (YOLO + MobileNetV2 + EfficientNet)
+    // Send prediction request to ML server
     try {
       const mlResponse = await requestPrediction({
         buffer: req.file.buffer,
@@ -154,15 +131,6 @@ export const detectDiseaseML = asyncHandler(async (req, res) => {
       console.warn("[ML] Local server unavailable or failed:", err.message);
     }
 
-    // --- Phase 2: AI Vision Fallback (Gemini/Groq) ---
-    // DISABLED as per user request to "use only three models"
-    /*
-    if (confidence < 50 || prediction === "Unknown" || !SUPPORTED_CROPS.includes(normalizedCrop)) {
-      ...
-    }
-    */
-
-    // Normalize confidence to 2 decimals
     confidence = Number(confidence.toFixed(2));
 
     // Upload image to Cloudinary for permanent storage
@@ -177,53 +145,11 @@ export const detectDiseaseML = asyncHandler(async (req, res) => {
       reportStatus: "pending_action",
     });
 
-    // Clean up prediction name for YouTube Search
-    const friendlyPrediction = prediction
-      .replace(/^(banana|chilli|radish|groundnut|cauliflower|apple|tomato|potato|corn|grape|peach|pepper|soybean|strawberry|squash)_/i, '')
-      .replace(/___/g, ' ')
-      .replace(/_/g, ' ')
-      .split(' ')
-      .map(w => w.charAt(0).toUpperCase() + w.slice(1))
-      .join(' ');
-
-    const searchQuery = `${normalizedCrop} ${friendlyPrediction}`;
-    const lang = req.user.language || "en";
-    const langMap = { en: "English", hi: "Hindi", mr: "Marathi" };
-    const languageName = langMap[lang] || "English";
-    const groundingPrefix = lang === "mr" ? "शेती आणि पीक " : lang === "hi" ? "कृषि और फसल " : "Agriculture farming crop ";
-
-    // Parallel fetch recommendations
-    const videoResults = await Promise.allSettled([
-      (async () => {
-        const query = `${groundingPrefix}${searchQuery} treatment control management`;
-        const fd = new FormData();
-        fd.append("query", query);
-        fd.append("language", languageName);
-        fd.append("max_duration", "20");
-        const mlRes = await axios.post(`${ML_SERVER_URL}/youtube-search`, fd, { headers: fd.getHeaders(), timeout: 12000 });
-        return mlRes.data?.success ? mlRes.data.videos : [];
-      })(),
-      (async () => {
-        const query = `${groundingPrefix}${normalizedCrop} yield recovery growth boost fertilizers`;
-        const fd = new FormData();
-        fd.append("query", query);
-        fd.append("language", languageName);
-        fd.append("max_duration", "20");
-        const mlRes = await axios.post(`${ML_SERVER_URL}/youtube-search`, fd, { headers: fd.getHeaders(), timeout: 12000 });
-        return mlRes.data?.success ? mlRes.data.videos : [];
-      })()
-    ]);
-
-    const videos = videoResults[0].status === 'fulfilled' ? videoResults[0].value : [];
-    const recoveryVideos = videoResults[1].status === 'fulfilled' ? videoResults[1].value : [];
-
     res.json({
       success: true,
       message: isAiAnalyzed ? "Disease detected via AI analysis" : "Disease detected",
       yield_estimation: mlData.yield_estimation || "N/A",
       details: mlData.details || {},
-      videos,
-      recoveryVideos,
       report: {
         _id: report._id,
         prediction,
@@ -234,7 +160,7 @@ export const detectDiseaseML = asyncHandler(async (req, res) => {
       },
     });
 
-    // ── WhatsApp Automation (Background) ──
+    // Send WhatsApp notification if user has a mobile number
     try {
       if (req.user.mobileNumber) {
         sendWhatsAppReport({
@@ -254,7 +180,6 @@ export const detectDiseaseML = asyncHandler(async (req, res) => {
   } catch (error) {
     console.error("ML prediction error:", error.message);
 
-    // Check if ML server is not running
     if (error.code === "ECONNREFUSED" || error.message.includes("ECONNREFUSED")) {
       return res.status(503).json({
         message: "ML server is not running. Please start it: cd crop_project && python app.py",
@@ -269,15 +194,11 @@ export const detectDiseaseML = asyncHandler(async (req, res) => {
   }
 });
 
-// --------------------------------------------------------------
-// 🌾 CROP IDENTIFICATION & RELEVANCE CHECK
-// --------------------------------------------------------------
+// Identify crop and check plant relevance via ML server
 export const identifyCropML = asyncHandler(async (req, res) => {
   if (!req.file) return res.status(400).json({ message: "Please upload an image." });
 
   try {
-    // Priority: Local ML Server (using the 3 allowed models)
-    console.log(`[*] Sending ID request to local ML Server: ${ML_SERVER_URL}/identify-crop`);
     const formData = new FormData();
     formData.append("file", req.file.buffer, {
       filename: req.file.originalname || "upload.jpg",
@@ -301,11 +222,7 @@ export const identifyCropML = asyncHandler(async (req, res) => {
 
     res.json(resData);
   } catch (error) {
-    console.error("Local ML Identification failed:", error.message);
-
-    // Fallback to Gemini only if absolutely necessary, but we might want to avoid it entirely
-    // to follow the "only three models" rule. For now, we'll keep it as a last-resort error handler
-    // but the primary path is now local ML.
+    console.error("Crop identification failed:", error.message);
     res.status(500).json({
       message: "Crop identification failed",
       error: error.message

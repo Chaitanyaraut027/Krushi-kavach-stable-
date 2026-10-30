@@ -1,7 +1,6 @@
 import asyncHandler from "express-async-handler";
 import { getCropDiseaseInfo, chatWithAI, getCropManagementInfo, getWeatherCropImpact, getMarketPrices, getSeedAndYieldAdvice } from "../services/gemini.service.js";
-import axios from "axios";
-import FormData from "form-data";
+import { getCache, setCache } from "../services/cache.service.js";
 import User from "../models/user.model.js";
 
 /**
@@ -16,69 +15,43 @@ export const fetchCropDiseaseInfo = asyncHandler(async (req, res) => {
         throw new Error("cropName and diseaseName are required.");
     }
 
+    // 1. Check Redis cache first (reduces LLM token cost & latency to <10ms)
+    const cacheKey = `ai:crop-disease:${cropName.trim().toLowerCase()}:${diseaseName.trim().toLowerCase()}:${language}`;
+    const cachedInfo = await getCache(cacheKey);
+    if (cachedInfo) {
+        return res.json({
+            success: true,
+            info: cachedInfo,
+            cached: true,
+            aiError: null
+        });
+    }
+
     const user = await User.findById(req.user._id).lean();
 
-    // Fetch all in parallel so one doesn't slow down or block the other
-    const results = await Promise.allSettled([
-        getCropDiseaseInfo(cropName, diseaseName, language, user?.groqApiKey),
-        (async () => {
-            const ML_SERVER_URL = process.env.ML_SERVER_URL || "http://localhost:8000";
-            const langMap = { en: "English", hi: "Hindi", mr: "Marathi" };
-            const languageName = langMap[language] || "English";
+    try {
+        const info = await getCropDiseaseInfo(cropName, diseaseName, language, user?.groqApiKey);
 
-            const fd = new FormData();
-            fd.append("query", `${cropName} ${diseaseName} treatment control`);
-            fd.append("language", languageName);
-            fd.append("max_duration", "20");
+        // 2. Cache successful AI response for 24 hours
+        if (info) {
+            await setCache(cacheKey, info, 86400);
+        }
 
-            const mlRes = await axios.post(`${ML_SERVER_URL}/youtube-search`, fd, {
-                headers: fd.getHeaders(),
-                timeout: 12000
-            });
-
-            return mlRes.data?.success ? mlRes.data.videos : [];
-        })(),
-        (async () => {
-            const ML_SERVER_URL = process.env.ML_SERVER_URL || "http://localhost:8000";
-            const langMap = { en: "English", hi: "Hindi", mr: "Marathi" };
-            const languageName = langMap[language] || "English";
-
-            const fd = new FormData();
-            fd.append("query", `${cropName} yield recovery boost fertilizers`);
-            fd.append("language", languageName);
-            fd.append("max_duration", "20");
-
-            const mlRes = await axios.post(`${ML_SERVER_URL}/youtube-search`, fd, {
-                headers: fd.getHeaders(),
-                timeout: 12000
-            });
-
-            return mlRes.data?.success ? mlRes.data.videos : [];
-        })()
-    ]);
-
-    const info = results[0].status === 'fulfilled' ? results[0].value : null;
-    const videos = results[1].status === 'fulfilled' ? results[1].value : [];
-    const recoveryVideos = results[2].status === 'fulfilled' ? results[2].value : [];
-
-    // ── Log Video Links in Backend (Gemini Path) ──
-    console.log(`[YouTube Search - Gemini Path] Crop: ${cropName}, Disease: ${diseaseName}`);
-    console.log(`[Treatment Videos]: ${videos.length} found. Status: ${results[1].status}`);
-    console.log(`[Recovery Videos]: ${recoveryVideos.length} found. Status: ${results[2].status}`);
-
-    if (videos.length > 0) console.log(`Links: ${videos.map(v => `https://youtu.be/${v.id}`).join(', ')}`);
-
-    if (results[0].status === 'rejected') console.error("AI Crop Info Failed:", results[0].reason?.message);
-    if (results[1].status === 'rejected') console.error("YouTube Treatment Search Failed:", results[1].reason?.message);
-    if (results[2].status === 'rejected') console.error("YouTube Recovery Search Failed:", results[2].reason?.message);
-
-    res.json({
-        success: true,
-        info,
-        videos,
-        recoveryVideos,
-        aiError: results[0].status === 'rejected' ? results[0].reason?.message : null
-    });
+        res.json({
+            success: true,
+            info,
+            cached: false,
+            aiError: null
+        });
+    } catch (err) {
+        console.error("AI Crop Info Failed:", err?.message);
+        res.json({
+            success: true,
+            info: null,
+            cached: false,
+            aiError: err?.message || "Failed to fetch AI crop info"
+        });
+    }
 });
 
 /**
@@ -154,9 +127,21 @@ export const marketPrices = asyncHandler(async (req, res) => {
         state = state || "Maharashtra"; // default
     }
 
+    // Check Redis cache for recent price lookup (1h TTL)
+    const cacheKey = `market:prices:${commodity.trim().toLowerCase()}:${district.trim().toLowerCase()}:${state.trim().toLowerCase()}`;
+    const cachedData = await getCache(cacheKey);
+    if (cachedData) {
+        return res.json({ success: true, data: cachedData, cached: true });
+    }
+
     const user = await User.findById(req.user._id).lean();
     const data = await getMarketPrices(commodity, district, state, user?.groqApiKey);
-    res.json({ success: true, data });
+
+    if (data) {
+        await setCache(cacheKey, data, 3600); // 1 hour TTL
+    }
+
+    res.json({ success: true, data, cached: false });
 });
 
 /**

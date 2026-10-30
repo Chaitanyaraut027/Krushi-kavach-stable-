@@ -1,33 +1,40 @@
 """
-Krishi Kavach – Local ML Inference Server (Multi-Model Ensemble)
-──────────────────────────────────────────────────────────────────
-YOLO (Banana/Chilli/Radish/Groundnut/Cauliflower)
-+ MobileNetV2 + EfficientNet-B0 (PlantVillage 38 classes)
+Krishi Kavach – ML Inference Server (ONNX Runtime)
+────────────────────────────────────────────────────
+Three-model ensemble:
+  • YOLO          — Banana, Chilli, Radish, Groundnut, Cauliflower
+  • MobileNetV2   — PlantVillage 38 classes
+  • EfficientNet  — PlantVillage 38 classes
 
-Run: python app.py   (starts on http://localhost:8000)
+All models run via ONNX Runtime (no PyTorch / Ultralytics needed).
+
+Run locally: python app.py  →  http://localhost:8000
+Deploy:      Docker + render.yaml (see Dockerfile / render.yaml)
 """
 
-from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Query
+from fastapi import FastAPI, File, UploadFile, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from ultralytics import YOLO
 from PIL import Image
 import io
 import os
+import json
+import numpy as np
+import onnxruntime as ort
 import uvicorn
-from dotenv import load_dotenv
-from youtube_search import search_disease_videos
 from multi_model import MultiModelInference
 
-# Groq/Gemini disabled as per user request
-GROQ_API_KEY = ""
-
 # ── Model paths ───────────────────────────────────────────────────────────────
-MODEL_PATH = os.path.join(os.path.dirname(__file__),
-                          "runs", "detect", "train", "weights", "best.pt")
+BASE_DIR   = os.path.dirname(__file__)
+ONNX_DIR   = os.path.join(BASE_DIR, "onnx_models_data")
+YOLO_PATH  = os.path.join(ONNX_DIR, "yolo_best.onnx")
+YOLO_NAMES = os.path.join(ONNX_DIR, "yolo_class_names.json")
 
-app = FastAPI(title="Krishi Kavach ML Server", version="3.0")
+# Crops handled by YOLO (in addition to the ensemble)
+YOLO_CROPS = {"banana", "chilli", "radish", "groundnut", "cauliflower"}
 
-# Allow requests from the Node backend (localhost:5000) and Vite dev (localhost:3000)
+# ── FastAPI app ───────────────────────────────────────────────────────────────
+app = FastAPI(title="Krishi Kavach ML Server", version="4.0")
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -35,48 +42,102 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── YOLO crops that the existing model supports (First Row Crops) ─────────────
-# As per user request: First row contains these 5 crops.
-FIRST_ROW_CROPS = {"banana", "chilli", "radish", "groundnut", "cauliflower"}
 
-# ── Load YOLO model once at startup ──────────────────────────────────────────
-print(f"Loading YOLO model from: {MODEL_PATH}")
-yolo_model = YOLO(MODEL_PATH)
-CLASS_NAMES = yolo_model.names          # {0: 'class_name', ...}
-print(f"YOLO model loaded. Classes: {CLASS_NAMES}")
+# ── YOLO helpers ──────────────────────────────────────────────────────────────
 
-# ── Load MobileNetV2 + EfficientNet ensemble ────────────────────────────────
-print("\nLoading multi-model ensemble (MobileNetV2 + EfficientNet)...")
+def load_yolo():
+    """Load YOLO ONNX session and class name map."""
+    if not os.path.exists(YOLO_PATH):
+        print(f"[-] YOLO ONNX not found at {YOLO_PATH}")
+        return None, {}
+
+    opts = ort.SessionOptions()
+    opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+    opts.intra_op_num_threads = 2
+    opts.inter_op_num_threads = 2
+
+    session = ort.InferenceSession(YOLO_PATH, opts, providers=["CPUExecutionProvider"])
+
+    names = {}
+    if os.path.exists(YOLO_NAMES):
+        with open(YOLO_NAMES) as f:
+            names = {int(k): v for k, v in json.load(f).items()}
+
+    print(f"[+] YOLO loaded - classes: {names}")
+    return session, names
+
+
+def yolo_preprocess(pil_image, size=640):
+    """Letterbox-resize + normalise to (1, 3, 640, 640) float32."""
+    img = np.array(pil_image.convert("RGB"))
+    h, w = img.shape[:2]
+    scale  = min(size / h, size / w)
+    new_h, new_w = int(h * scale), int(w * scale)
+    resized = np.array(pil_image.convert("RGB").resize((new_w, new_h), Image.BILINEAR))
+
+    pad_h = (size - new_h) // 2
+    pad_w = (size - new_w) // 2
+    canvas = np.full((size, size, 3), 114, dtype=np.uint8)
+    canvas[pad_h:pad_h + new_h, pad_w:pad_w + new_w] = resized
+
+    blob = canvas.astype(np.float32) / 255.0
+    blob = blob.transpose(2, 0, 1)[np.newaxis, ...]   # (1, 3, 640, 640)
+    return blob
+
+
+def yolo_postprocess(output, names, conf_thresh=0.25):
+    """Extract top detections from YOLOv8 ONNX output (1, 4+C, 8400)."""
+    preds = output[0].T          # (8400, 4+C)
+    class_probs = preds[:, 4:]
+    best_ids    = np.argmax(class_probs, axis=1)
+    best_confs  = np.max(class_probs, axis=1)
+
+    mask = best_confs > conf_thresh
+    detections = [
+        {"class_name": names.get(int(cid), f"cls_{cid}"),
+         "confidence": round(float(conf) * 100, 2)}
+        for conf, cid in zip(best_confs[mask], best_ids[mask])
+    ]
+    return sorted(detections, key=lambda d: d["confidence"], reverse=True)
+
+
+# ── Load models once at startup ───────────────────────────────────────────────
+print(f"\nLoading YOLO ONNX from: {YOLO_PATH}")
+yolo_session, CLASS_NAMES = load_yolo()
+
+print("\nLoading MobileNetV2 + EfficientNet ensemble (ONNX)...")
 multi_engine = MultiModelInference()
 print(f"PlantVillage crops: {multi_engine.get_supported_crops()}\n")
 
 
-# ── Health check ──────────────────────────────────────────────────────────────
+# ── Endpoints ─────────────────────────────────────────────────────────────────
+
 @app.get("/")
 @app.get("/health")
 def health():
+    """Health check — returns supported crops and loaded models."""
     pv_crops = multi_engine.get_supported_crops()
     return {
         "status": "running",
-        "model": "best.pt (Krishi Kavach v3 — Multi-Model Ensemble)",
-        "yolo_crops": list(FIRST_ROW_CROPS),
+        "version": "4.0 (ONNX)",
+        "yolo_crops": sorted(YOLO_CROPS),
         "plantvillage_crops": pv_crops,
-        "all_supported_crops": sorted(set(
-            [c.capitalize() for c in FIRST_ROW_CROPS] + pv_crops
-        )),
-        "yolo_classes": CLASS_NAMES,
+        "all_supported_crops": sorted(set([c.capitalize() for c in YOLO_CROPS] + pv_crops)),
         "models": ["yolo", "mobilenetv2", "efficientnet"],
+        "runtime": "onnxruntime",
     }
 
 
-# ── Prediction endpoint (multi-model ensemble) ───────────────────────────────
 @app.post("/predict")
 async def predict(
     file: UploadFile = File(...),
     crop: str = Form(default=""),
-    language: str = Form(default="english")
 ):
-    # Read image bytes
+    """
+    Disease prediction endpoint.
+    Accepts an image + optional crop name.
+    Returns the best prediction across all active models.
+    """
     contents = await file.read()
     try:
         image = Image.open(io.BytesIO(contents)).convert("RGB")
@@ -84,98 +145,62 @@ async def predict(
         raise HTTPException(status_code=400, detail="Invalid image file.")
 
     crop_lower = crop.strip().lower()
-    
-    # ── RULE ──────────────────────────────────────────────────────────────────
-    # 1. Row 1 Crops (First 5): Use YOLO + MobileNetV2 + EfficientNet
-    # 2. Other Crops: Use only MobileNetV2 + EfficientNet
-    # ──────────────────────────────────────────────────────────────────────────
-    is_first_row_crop = crop_lower in FIRST_ROW_CROPS
+    all_preds  = []
 
-    all_predictions = []  # collect {model, predicted_class, confidence, ...}
+    # ── 1. YOLO (only for its 5 supported crops) ──────────────────────────────
+    if crop_lower in YOLO_CROPS and yolo_session is not None:
+        blob   = yolo_preprocess(image)
+        name   = yolo_session.get_inputs()[0].name
+        output = yolo_session.run(None, {name: blob})
+        dets   = yolo_postprocess(output, CLASS_NAMES)
+        if dets:
+            best = dets[0]
+            all_preds.append({
+                "model":           "yolo",
+                "predicted_class": best["class_name"],
+                "confidence":      best["confidence"],
+                "is_healthy":      "healthy" in best["class_name"].lower(),
+            })
 
-    # ── 1. YOLO inference (ONLY if it's a first-row crop) ─────────────────────
-    if is_first_row_crop:
-        results = yolo_model(image, verbose=False)
-        if results and len(results) > 0:
-            result = results[0]
-            if result.boxes is not None and len(result.boxes) > 0:
-                boxes = result.boxes
-                confs = boxes.conf.tolist()
-                class_ids = boxes.cls.tolist()
-                best_idx = confs.index(max(confs))
-                best_conf = round(confs[best_idx] * 100, 2)
-                best_class = CLASS_NAMES[int(class_ids[best_idx])]
-                all_predictions.append({
-                    "model": "yolo",
-                    "predicted_class": best_class,
-                    "confidence": best_conf,
-                    "is_healthy": "healthy" in best_class.lower(),
-                })
-
-    # ── 2. MobileNetV2 + EfficientNet inference (always run) ──────────────────
-    # These are the "other two pretrained models" mentioned by the user.
-    pv_results = multi_engine.predict(image, crop_name=crop)
-    for pv in pv_results:
-        all_predictions.append({
-            "model": pv["model"],
+    # ── 2. MobileNetV2 + EfficientNet (always run) ────────────────────────────
+    for pv in multi_engine.predict(image, crop_name=crop):
+        all_preds.append({
+            "model":           pv["model"],
             "predicted_class": pv["raw_class"],
-            "confidence": pv["confidence"],
-            "disease": pv["disease"],
-            "full_label": pv["full_label"],
-            "is_healthy": pv["is_healthy"],
+            "confidence":      pv["confidence"],
+            "disease":         pv["disease"],
+            "full_label":      pv["full_label"],
+            "is_healthy":      pv["is_healthy"],
         })
 
-    # ── 3. Pick best prediction across all models (Highest Confidence) ────────
-    if not all_predictions:
+    # ── 3. No detections → return healthy default ─────────────────────────────
+    if not all_preds:
         return {
             "predicted_class": "Healthy",
-            "confidence": 0.0,
-            "crop": crop,
-            "model_used": "none",
-            "detections": [],
+            "confidence":      0.0,
+            "crop":            crop,
+            "model_used":      "none",
+            "detections":      [],
         }
 
-    # Sort by confidence descending
-    all_predictions.sort(key=lambda p: p["confidence"], reverse=True)
-    best = all_predictions[0]
-
-    # ── 4. YouTube Recommendations ───────────────────────────────────────────
-    recommended_videos = []
-    if not best.get("is_healthy", False):
-        try:
-            # Clean up class name for search (e.g. 'Tomato___Late_blight' -> 'Late Blight')
-            disease_class = best["predicted_class"]
-            if "___" in disease_class:
-                disease_name = disease_class.split("___")[-1].replace("_", " ")
-            else:
-                disease_name = disease_class.replace("_", " ").replace(crop_lower, "").strip()
-            
-            recommended_videos = search_disease_videos(
-                crop_name=crop or disease_class.split("___")[0],
-                disease_name=disease_name,
-                language=language,
-                max_results=5,
-                api_key=GROQ_API_KEY
-            )
-        except Exception as e:
-            print(f"⚠ YouTube search failed during prediction: {e}")
+    # ── 4. Pick highest-confidence prediction ─────────────────────────────────
+    all_preds.sort(key=lambda p: p["confidence"], reverse=True)
+    best = all_preds[0]
 
     return {
         "predicted_class": best["predicted_class"],
         "confidence":      best["confidence"],
         "crop":            crop,
         "model_used":      best["model"],
-        "detections":      all_predictions,
-        "recommended_videos": recommended_videos,
+        "detections":      all_preds,
     }
 
 
-# ── Crop Identification endpoint ──────────────────────────────────────────────
 @app.post("/identify-crop")
 async def identify_crop(file: UploadFile = File(...)):
     """
-    Identify if the uploaded image is a relevant plant/crop.
-    Uses the ensemble to check for high-confidence matches.
+    Crop identification endpoint.
+    Returns whether the image is a recognisable plant/crop and which one.
     """
     contents = await file.read()
     try:
@@ -183,93 +208,21 @@ async def identify_crop(file: UploadFile = File(...)):
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid image file.")
 
-    # Run ensemble
     results = multi_engine.predict(image)
     if not results:
         return {"relevant": False, "detectedCrop": "Other", "confidence": 0}
 
-    best = results[0]
-    # If the ensemble is confident (>40%) in any PlantVillage crop, we consider it relevant
+    best        = results[0]
     is_relevant = best["confidence"] > 40.0
-    
+    crop_name   = best["full_label"].split()[0]
+    crop_name   = crop_name.capitalize()
+
     return {
-        "relevant": is_relevant,
-        "detectedCrop": best["full_label"].split()[0], # Get the crop part
-        "confidence": best["confidence"],
-        "explanation": f"Detected {best['full_label']} via {best['model']}"
+        "relevant":     is_relevant,
+        "detectedCrop": crop_name,
+        "confidence":   best["confidence"],
+        "explanation":  f"Detected {best['full_label']} via {best['model']}",
     }
-
-
-# ── YouTube Disease Video Recommendation ──────────────────────────────────────
-@app.get("/youtube-recommend")
-async def youtube_recommend(
-    crop: str = Query(..., description="Crop name, e.g. Banana"),
-    disease: str = Query(..., description="Disease name, e.g. Sigatoka"),
-    language: str = Query(
-        "english", description="Language: english, hindi, or marathi"),
-    max_results: int = Query(5, ge=1, le=10, description="Number of results"),
-):
-    """
-    Get YouTube video recommendations for treating a specific crop disease.
-    Returns the best videos ranked by relevance.
-    """
-    if not crop or not disease:
-        raise HTTPException(
-            status_code=400, detail="crop and disease are required")
-
-    try:
-        videos = search_disease_videos(
-            crop_name=crop.strip(),
-            disease_name=disease.strip(),
-            language=language.strip(),
-            max_results=max_results,
-            api_key=GROQ_API_KEY,
-        )
-        return {
-            "crop": crop,
-            "disease": disease,
-            "language": language,
-            "count": len(videos),
-            "videos": videos,
-        }
-    except Exception as e:
-        print(f"❌ YouTube recommend error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# ── YouTube Video Search (POST version for Node backend) ──────────────────────
-@app.post("/youtube-search")
-async def youtube_search(
-    query: str = Form(..., description="Full search query"),
-    language: str = Form("english", description="User language"),
-    max_duration: int = Form(20, description="Max video duration in minutes"),
-):
-    """
-    Handle generic YouTube search requests from the Node backend.
-    """
-    try:
-        from youtubesearchpython import VideosSearch
-        
-        print(f"🔍 Generic YouTube search: '{query}' ({language})")
-        vs = VideosSearch(query, limit=10)
-        results = vs.result().get("result", [])
-        
-        videos = []
-        for item in results:
-            videos.append({
-                "id": item.get("id"),
-                "title": item.get("title"),
-                "url": item.get("link"),
-                "thumbnail": item.get("thumbnails", [{}])[-1].get("url"),
-                "duration": item.get("duration"),
-                "channel": item.get("channel", {}).get("name"),
-                "views": item.get("viewCount", {}).get("short", "0 views"),
-            })
-            
-        return {"success": True, "videos": videos}
-    except Exception as e:
-        print(f"❌ YouTube search error: {e}")
-        return {"success": False, "error": str(e)}
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────

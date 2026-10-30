@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: krishi-kavach-ml
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: starter        # $7/month — 1GB RAM (free plan 512MB may be tight for ONNX models)
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: 8000

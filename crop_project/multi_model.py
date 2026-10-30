@@ -1,9 +1,8 @@
 """
-Multi-Model Plant Disease Inference Engine
-──────────────────────────────────────────
+Multi-Model Plant Disease Inference Engine (ONNX Runtime)
+──────────────────────────────────────────────────────────
 Runs MobileNetV2 + EfficientNet-B0 (PlantVillage 38 classes) alongside
-the existing YOLO model.  Returns the prediction with the highest
-confidence across all models.
+the existing YOLO model — all via ONNX Runtime (no PyTorch needed).
 
 Usage (called from app.py):
     from multi_model import MultiModelInference
@@ -13,17 +12,17 @@ Usage (called from app.py):
 
 import os
 import json
-import torch
-import torch.nn as nn
-from torchvision import models as tv_models, transforms
+import numpy as np
+import onnxruntime as ort
 from PIL import Image
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 BASE_DIR = os.path.dirname(__file__)
-MODELS_DIR = os.path.join(BASE_DIR, "pretrained_models")
+MODELS_DIR = os.path.join(BASE_DIR, "onnx_models_data")  # pretrained class_names.json here
+ONNX_DIR = os.path.join(BASE_DIR, "onnx_models_data")    # .onnx model files here
 CLASS_NAMES_PATH = os.path.join(MODELS_DIR, "class_names.json")
-MOBILENET_PATH = os.path.join(MODELS_DIR, "mobilenetv2_plant.pth")
-EFFICIENTNET_PATH = os.path.join(MODELS_DIR, "efficientnet_plant.pth")
+MOBILENET_ONNX = os.path.join(ONNX_DIR, "mobilenetv2_plant.onnx")
+EFFICIENTNET_ONNX = os.path.join(ONNX_DIR, "efficientnet_plant.onnx")
 
 # ── PlantVillage 38 class names (fallback if json not present) ─────────────────
 DEFAULT_CLASSES = [
@@ -67,13 +66,9 @@ DEFAULT_CLASSES = [
     "Tomato___healthy",
 ]
 
-# ── Image transform (same for both models) ────────────────────────────────────
-_transform = transforms.Compose([
-    transforms.Resize((224, 224)),
-    transforms.ToTensor(),
-    transforms.Normalize([0.485, 0.456, 0.406],
-                         [0.229, 0.224, 0.225]),
-])
+# ── ImageNet normalization constants ───────────────────────────────────────────
+MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
 
 # ── Crop name mapping: PlantVillage label prefix → UI crop name ────────────────
 _PV_CROP_MAP = {
@@ -92,8 +87,6 @@ _PV_CROP_MAP = {
     "Strawberry":             "Strawberry",
     "Tomato":                 "Tomato",
 }
-
-# Reverse: UI crop name → all matching PlantVillage class indices
 
 
 def _build_crop_index_map(class_names):
@@ -119,13 +112,28 @@ def _full_friendly_name(raw_class: str) -> str:
     return raw_class.replace("___", " ").replace("_", " ").strip()
 
 
+def _softmax(x):
+    """Compute softmax for a 1-D array."""
+    e = np.exp(x - np.max(x))
+    return e / e.sum()
+
+
+def _preprocess(pil_image: Image.Image) -> np.ndarray:
+    """
+    Preprocess PIL image for ONNX inference.
+    Returns numpy array of shape (1, 3, 224, 224) as float32.
+    """
+    img = pil_image.convert("RGB").resize((224, 224), Image.BILINEAR)
+    arr = np.array(img, dtype=np.float32) / 255.0  # (224, 224, 3)
+    arr = (arr - MEAN) / STD                        # normalize
+    arr = arr.transpose(2, 0, 1)                    # (3, 224, 224)
+    return arr[np.newaxis, ...]                      # (1, 3, 224, 224)
+
+
 class MultiModelInference:
-    """Loads MobileNetV2 + EfficientNet-B0 for PlantVillage 38 classes."""
+    """Loads MobileNetV2 + EfficientNet-B0 ONNX models for PlantVillage 38 classes."""
 
     def __init__(self):
-        self.device = torch.device(
-            "cuda" if torch.cuda.is_available() else "cpu")
-
         # Load class names
         if os.path.exists(CLASS_NAMES_PATH):
             with open(CLASS_NAMES_PATH) as f:
@@ -136,97 +144,59 @@ class MultiModelInference:
         self.num_classes = len(self.class_names)
         self.crop_index_map = _build_crop_index_map(self.class_names)
 
-        # Load models
-        self.mobilenet = self._load_mobilenet()
-        self.efficientnet = self._load_efficientnet()
+        # ONNX Runtime session options (optimize for CPU)
+        sess_opts = ort.SessionOptions()
+        sess_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        sess_opts.intra_op_num_threads = 2
+        sess_opts.inter_op_num_threads = 2
+
+        # Load ONNX models
+        self.mobilenet = self._load_session(MOBILENET_ONNX, "MobileNetV2", sess_opts)
+        self.efficientnet = self._load_session(EFFICIENTNET_ONNX, "EfficientNet", sess_opts)
 
         print(
-            f"✅ Multi-model engine ready  |  device={self.device}  |  classes={self.num_classes}")
+            f"[+] Multi-model ONNX engine ready  |  classes={self.num_classes}")
         print(f"   MobileNetV2 :  {'loaded' if self.mobilenet else 'FAILED'}")
         print(
             f"   EfficientNet:  {'loaded' if self.efficientnet else 'FAILED'}")
 
-    # ── Model loaders ──────────────────────────────────────────────────────────
-
-    def _load_mobilenet(self):
+    def _load_session(self, onnx_path, name, sess_opts):
+        """Load an ONNX Runtime session."""
         try:
-            model = tv_models.mobilenet_v2(weights=None)
-            in_feat = model.classifier[1].in_features
-            model.classifier[1] = nn.Sequential(
-                nn.Dropout(0.2),
-                nn.Linear(in_feat, self.num_classes),
-            )
-            if os.path.exists(MOBILENET_PATH):
-                state = torch.load(
-                    MOBILENET_PATH, map_location=self.device, weights_only=False)
-                model.load_state_dict(state, strict=False)
-                print(f"  ✅ MobileNetV2 weights loaded from {MOBILENET_PATH}")
+            if os.path.exists(onnx_path):
+                session = ort.InferenceSession(onnx_path, sess_opts,
+                                                providers=["CPUExecutionProvider"])
+                print(f"  [+] {name} ONNX loaded from {onnx_path}")
+                return session
             else:
-                # Use ImageNet-pretrained backbone + random classifier
-                model = tv_models.mobilenet_v2(weights="IMAGENET1K_V1")
-                in_feat = model.classifier[1].in_features
-                model.classifier[1] = nn.Sequential(
-                    nn.Dropout(0.2),
-                    nn.Linear(in_feat, self.num_classes),
-                )
-                print(
-                    "  ⚠️  MobileNetV2: no PlantVillage weights found, using ImageNet backbone")
-            model.to(self.device).eval()
-            return model
+                print(f"  [-] {name}: ONNX file not found at {onnx_path}")
+                return None
         except Exception as e:
-            print(f"  ❌ MobileNetV2 load error: {e}")
-            return None
-
-    def _load_efficientnet(self):
-        try:
-            model = tv_models.efficientnet_b0(weights=None)
-            in_feat = model.classifier[1].in_features
-            model.classifier[1] = nn.Sequential(
-                nn.Dropout(0.2),
-                nn.Linear(in_feat, self.num_classes),
-            )
-            if os.path.exists(EFFICIENTNET_PATH):
-                state = torch.load(
-                    EFFICIENTNET_PATH, map_location=self.device, weights_only=False)
-                model.load_state_dict(state, strict=False)
-                print(
-                    f"  ✅ EfficientNet weights loaded from {EFFICIENTNET_PATH}")
-            else:
-                model = tv_models.efficientnet_b0(weights="IMAGENET1K_V1")
-                in_feat = model.classifier[1].in_features
-                model.classifier[1] = nn.Sequential(
-                    nn.Dropout(0.2),
-                    nn.Linear(in_feat, self.num_classes),
-                )
-                print(
-                    "  ⚠️  EfficientNet: no PlantVillage weights found, using ImageNet backbone")
-            model.to(self.device).eval()
-            return model
-        except Exception as e:
-            print(f"  ❌ EfficientNet load error: {e}")
+            print(f"  [-] {name} ONNX load error: {e}")
             return None
 
     # ── Single-model inference ─────────────────────────────────────────────────
 
-    def _infer(self, model, image_tensor, crop_name=None):
+    def _infer(self, session, input_data, crop_name=None):
         """
-        Run inference for one model.
+        Run inference for one ONNX model.
         If crop_name is given and matches PlantVillage crops,
         restrict prediction to that crop's classes only.
         Returns (raw_class, confidence_pct, class_index).
         """
-        if model is None:
+        if session is None:
             return None, 0.0, -1
 
-        with torch.no_grad():
-            logits = model(image_tensor)
-            probs = torch.softmax(logits, dim=1)[0]
+        input_name = session.get_inputs()[0].name
+        outputs = session.run(None, {input_name: input_data})
+        logits = outputs[0][0]  # shape: (num_classes,)
+        probs = _softmax(logits)
 
         # Optionally restrict to crop-specific classes
         crop_key = (crop_name or "").strip().lower()
         if crop_key and crop_key in self.crop_index_map:
             indices = self.crop_index_map[crop_key]
-            mask = torch.zeros_like(probs)
+            mask = np.zeros_like(probs)
             for i in indices:
                 mask[i] = probs[i]
             # Re-normalize among the crop's classes
@@ -234,7 +204,7 @@ class MultiModelInference:
             if total > 0:
                 probs = mask / total
 
-        best_idx = probs.argmax().item()
+        best_idx = int(np.argmax(probs))
         best_conf = float(probs[best_idx]) * 100.0
         raw_class = self.class_names[best_idx]
         return raw_class, round(best_conf, 2), best_idx
@@ -257,13 +227,12 @@ class MultiModelInference:
             ...
         ]
         """
-        image_tensor = _transform(pil_image.convert(
-            "RGB")).unsqueeze(0).to(self.device)
+        input_data = _preprocess(pil_image)
 
         results = []
 
         # MobileNetV2
-        raw_cls, conf, _ = self._infer(self.mobilenet, image_tensor, crop_name)
+        raw_cls, conf, _ = self._infer(self.mobilenet, input_data, crop_name)
         if raw_cls:
             results.append({
                 "model": "mobilenetv2",
@@ -276,7 +245,7 @@ class MultiModelInference:
 
         # EfficientNet
         raw_cls, conf, _ = self._infer(
-            self.efficientnet, image_tensor, crop_name)
+            self.efficientnet, input_data, crop_name)
         if raw_cls:
             results.append({
                 "model": "efficientnet",

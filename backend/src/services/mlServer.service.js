@@ -1,11 +1,19 @@
 import axios from "axios";
 
-// 🏠 Local ML server (FastAPI running crop_project/app.py on port 8000)
+/**
+ * ML Server Service
+ * ─────────────────
+ * Connects the Node backend to the FastAPI ML inference server.
+ *
+ * In production: set ML_SERVER_URL to your Render deployment URL
+ *   e.g. https://krishi-kavach-ml.onrender.com
+ *
+ * In development: run `python app.py` inside crop_project/
+ *   ML server will be available at http://localhost:8000
+ */
 const ML_SERVER_URL = process.env.ML_SERVER_URL || "http://localhost:8000";
 
-// ----------------------------------------------------------------------
-// 1️⃣ Check if local ML server is alive
-// ----------------------------------------------------------------------
+// ── 1. Health Check ─────────────────────────────────────────────────────────
 export const checkMLServerStatus = async () => {
   try {
     const res = await axios.get(`${ML_SERVER_URL}/health`, { timeout: 5000 });
@@ -16,9 +24,7 @@ export const checkMLServerStatus = async () => {
   }
 };
 
-// ----------------------------------------------------------------------
-// 2️⃣ Wait for local ML server to start (short timeout — local is fast)
-// ----------------------------------------------------------------------
+// ── 2. Wait for ML Server (used at startup for local dev) ───────────────────
 export const waitForMLServer = async (maxWait = 10000) => {
   const start = Date.now();
   while (Date.now() - start < maxWait) {
@@ -29,24 +35,21 @@ export const waitForMLServer = async (maxWait = 10000) => {
   return false;
 };
 
-// ----------------------------------------------------------------------
-// 3️⃣ "Start" — just verify the local server is reachable
-// ----------------------------------------------------------------------
+// ── 3. Start Check (for local dev only) ────────────────────────────────────
 export const startMLServer = async () => {
-  console.log("Checking local ML server at", ML_SERVER_URL);
+  console.log("[ML] Checking ML server at:", ML_SERVER_URL);
   const ready = await waitForMLServer(10000);
   if (!ready) {
     throw new Error(
-      "Local ML server is not running. " +
-      "Please start it with: cd crop_project && python app.py"
+      "ML server is not reachable. " +
+      "For local dev: cd crop_project && python app.py\n" +
+      "For production: set ML_SERVER_URL to your Render URL"
     );
   }
-  console.log("Local ML server is ready.");
+  console.log("[ML] ML server is ready at:", ML_SERVER_URL);
 };
 
-// ----------------------------------------------------------------------
-// 4️⃣ Predict (Node → local FastAPI → result back to frontend)
-// ----------------------------------------------------------------------
+// ── 4. Run Prediction (Node → FastAPI → result) ─────────────────────────────
 export const runPrediction = async (imageBase64) => {
   try {
     const res = await axios.post(
@@ -56,7 +59,7 @@ export const runPrediction = async (imageBase64) => {
     );
     return res.data;
   } catch (err) {
-    console.error("Prediction error:", err.message);
-    throw new Error("Failed to get prediction from local ML server");
+    console.error("[ML] Prediction error:", err.message);
+    throw new Error("Failed to get prediction from ML server");
   }
 };

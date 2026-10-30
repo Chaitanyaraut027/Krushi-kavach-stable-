@@ -180,9 +180,6 @@ const DiseaseDetection = ({ onDetectionComplete }) => {
   const [isDragging, setIsDragging] = useState(false);
   // ── Gemini AI info state ────────────────────────────────────────────────────
   const [geminiInfo, setGeminiInfo] = useState(null);
-  const [youtubeVideos, setYoutubeVideos] = useState([]);
-  const [recoveryVideos, setRecoveryVideos] = useState([]);
-  const [activeVideoId, setActiveVideoId] = useState(null);
   const [geminiLoading, setGeminiLoading] = useState(false);
   const [geminiError, setGeminiError] = useState('');
   const [showKeyModal, setShowKeyModal] = useState(false);
@@ -463,8 +460,6 @@ const DiseaseDetection = ({ onDetectionComplete }) => {
     setError('');
     setMlOffline(false);
     setGeminiInfo(null);
-    setYoutubeVideos([]);
-    setRecoveryVideos([]);
     setGeminiError('');
     setIsDragging(false);
   };
@@ -499,25 +494,17 @@ const DiseaseDetection = ({ onDetectionComplete }) => {
         details: data.details || {}
       };
       setPredictionResult(result);
-      setYoutubeVideos(data.videos || []);
-      setRecoveryVideos(data.recoveryVideos || []);
 
       // Auto-start speech for basic detection result
       setTimeout(() => handleSpeak(result, null), 500);
 
-      console.log("Detection Videos:", data.videos);
-      console.log("Recovery Videos:", data.recoveryVideos);
-
       fetchReports(); // refresh history
       if (onDetectionComplete) onDetectionComplete(report);
 
-      // ── Auto-fetch Gemini info (skip if image is unprocessable) ──
+      // Auto-fetch AI crop info if confidence is sufficient
       const isInvalid = report.confidence < 30;
       if (!isInvalid) {
         setGeminiLoading(true);
-        // We don't clear videos here because we already got them from detection 
-        // unless we want gemini to override them. 
-        // For now, let's keep the ones from detection and let gemini override if it returns new ones.
         setGeminiInfo(null);
         setGeminiError('');
 
@@ -536,16 +523,6 @@ const DiseaseDetection = ({ onDetectionComplete }) => {
             lang
           );
           setGeminiInfo(gemRes.data.info);
-
-          // Only update videos if gemini actually returns new ones
-          if (gemRes.data.videos && gemRes.data.videos.length > 0) {
-            console.log("Gemini overriding Treatment Videos:", gemRes.data.videos);
-            setYoutubeVideos(gemRes.data.videos);
-          }
-          if (gemRes.data.recoveryVideos && gemRes.data.recoveryVideos.length > 0) {
-            console.log("Gemini overriding Recovery Videos:", gemRes.data.recoveryVideos);
-            setRecoveryVideos(gemRes.data.recoveryVideos);
-          }
 
           // Restart speech with full AI info
           handleSpeak(result, gemRes.data.info);
@@ -595,8 +572,6 @@ const DiseaseDetection = ({ onDetectionComplete }) => {
     setError('');
     setMlOffline(false);
     setGeminiInfo(null);
-    setYoutubeVideos([]);
-    setRecoveryVideos([]);
     setGeminiError('');
     setDiseaseContext('');
     setRelevanceError('');
@@ -1038,7 +1013,7 @@ const DiseaseDetection = ({ onDetectionComplete }) => {
         )}
 
         {/* ── Gemini AI Crop Info Panel ────────────────────────────────── */}
-        {(geminiLoading || geminiInfo || geminiError || youtubeVideos.length > 0) && (
+        {(geminiLoading || geminiInfo || geminiError) && (
           <div className={`${cardBg} rounded-3xl shadow-xl border-2 border-purple-400/30 p-6 md:p-8 mb-6 fade-up`}>
             {/* Header */}
             <div className="flex items-center gap-3 mb-5">
@@ -1047,7 +1022,7 @@ const DiseaseDetection = ({ onDetectionComplete }) => {
               </div>
               <div>
                 <h2 className={`text-lg font-bold ${textH}`}>{t('AI Crop Information')}</h2>
-                <p className={`text-xs ${isDark ? 'text-purple-400' : 'text-purple-600'} font-medium`}>AI-powered crop disease insights & tutorials</p>
+                <p className={`text-xs ${isDark ? 'text-purple-400' : 'text-purple-600'} font-medium`}>AI-powered crop disease insights & recommendations</p>
               </div>
             </div>
 
@@ -1197,107 +1172,6 @@ const DiseaseDetection = ({ onDetectionComplete }) => {
               </div>
             )}
 
-            {/* ── YouTube Video Recommendations (Treatment) ── */}
-            {youtubeVideos && youtubeVideos.length > 0 && (
-              <div className="mt-8 pt-8 border-t border-purple-100 dark:border-white/10 fade-up">
-                <div className="flex items-center justify-between mb-6">
-                  <div className="flex items-center gap-3">
-                    <div className="p-2 bg-red-100 text-red-600 rounded-xl">
-                      <ImageIcon size={20} />
-                    </div>
-                    <div>
-                      <h4 className={`font-black ${textH}`}>{t('Recommended Learning Videos')}</h4>
-                      <p className="text-xs text-gray-500 font-medium">Top educational guides in {lang === 'mr' ? 'Marathi' : lang === 'hi' ? 'Hindi' : 'English'}</p>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex overflow-x-auto gap-4 pb-4 no-scrollbar -mx-2 px-2 snap-x">
-                  {youtubeVideos.map((video) => (
-                    <div
-                      key={video.id}
-                      onClick={() => setActiveVideoId(video.id)}
-                      className={`${cardBg} flex-shrink-0 w-[240px] overflow-hidden rounded-2xl border border-gray-100 dark:border-white/10 hover:shadow-lg transition-all cursor-pointer group snap-start`}
-                    >
-                      <div className="relative aspect-video bg-gray-900 overflow-hidden">
-                        <img
-                          src={`https://img.youtube.com/vi/${video.id}/mqdefault.jpg`}
-                          alt={video.title}
-                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                        />
-                        <div className="absolute inset-0 bg-black/20 group-hover:bg-black/40 flex items-center justify-center transition-all">
-                          <div className="w-10 h-10 bg-red-600 rounded-full flex items-center justify-center text-white shadow-xl scale-0 group-hover:scale-100 transition-all">
-                            <Play size={20} fill="currentColor" />
-                          </div>
-                        </div>
-                        <span className="absolute bottom-2 right-2 bg-black/70 text-white text-[10px] font-bold px-1.5 py-0.5 rounded">
-                          {video.duration}
-                        </span>
-                      </div>
-                      <div className="p-3">
-                        <h5 className="text-[11px] font-bold text-gray-800 dark:text-gray-200 line-clamp-2 leading-tight mb-1 group-hover:text-red-600 transition-colors">
-                          {video.title}
-                        </h5>
-                        <div className="flex items-center justify-between text-[9px] text-gray-500 font-bold">
-                          <span>{video.channel}</span>
-                          <span>{video.views?.toLocaleString()} views</span>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* ── YouTube Video Recommendations (Yield Recovery) ── */}
-            {recoveryVideos && recoveryVideos.length > 0 && (
-              <div className="mt-6 pt-6 border-t border-indigo-100 dark:border-white/10 fade-up">
-                <div className="flex items-center gap-3 mb-6">
-                  <div className="p-2 bg-indigo-100 text-indigo-600 rounded-xl">
-                    <TrendingUp size={20} />
-                  </div>
-                  <div>
-                    <h4 className={`font-black ${textH}`}>{t('Yield Recovery & Growth Boost')}</h4>
-                    <p className="text-xs text-gray-500 font-medium">Learn how to recover health and maximize your harvest</p>
-                  </div>
-                </div>
-
-                <div className="flex overflow-x-auto gap-4 pb-4 no-scrollbar -mx-2 px-2 snap-x">
-                  {recoveryVideos.map((video) => (
-                    <div
-                      key={video.id}
-                      onClick={() => setActiveVideoId(video.id)}
-                      className={`${cardBg} flex-shrink-0 w-[240px] overflow-hidden rounded-2xl border border-gray-100 dark:border-white/10 hover:shadow-lg transition-all cursor-pointer group snap-start`}
-                    >
-                      <div className="relative aspect-video bg-gray-900 overflow-hidden">
-                        <img
-                          src={`https://img.youtube.com/vi/${video.id}/mqdefault.jpg`}
-                          alt={video.title}
-                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                        />
-                        <div className="absolute inset-0 bg-black/20 group-hover:bg-black/40 flex items-center justify-center transition-all">
-                          <div className="w-10 h-10 bg-indigo-600 rounded-full flex items-center justify-center text-white shadow-xl scale-0 group-hover:scale-100 transition-all">
-                            <Play size={20} fill="currentColor" />
-                          </div>
-                        </div>
-                        <span className="absolute bottom-2 right-2 bg-black/70 text-white text-[10px] font-bold px-1.5 py-0.5 rounded">
-                          {video.duration}
-                        </span>
-                      </div>
-                      <div className="p-3">
-                        <h5 className="text-[11px] font-bold text-gray-800 dark:text-gray-200 line-clamp-2 leading-tight mb-1 group-hover:text-indigo-600 transition-colors">
-                          {video.title}
-                        </h5>
-                        <div className="flex items-center justify-between text-[9px] text-gray-500 font-bold">
-                          <span>{video.channel}</span>
-                          <span>{video.views?.toLocaleString()} views</span>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
           </div>
         )}
 
@@ -1405,29 +1279,6 @@ const DiseaseDetection = ({ onDetectionComplete }) => {
         )}
       </div>
 
-      {/* ── Video Player Modal ── */}
-      {activeVideoId && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/90 backdrop-blur-md animate-in fade-in duration-300">
-          <div className="relative w-full max-w-4xl aspect-video bg-black rounded-3xl overflow-hidden shadow-2xl border border-white/10">
-            <button
-              onClick={() => setActiveVideoId(null)}
-              className="absolute top-4 right-4 z-10 p-2 bg-white/10 hover:bg-white/20 rounded-full text-white transition-colors"
-            >
-              <X size={24} />
-            </button>
-            <iframe
-              width="100%"
-              height="100%"
-              src={`https://www.youtube.com/embed/${activeVideoId}?autoplay=1`}
-              title="YouTube video player"
-              frameBorder="0"
-              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-              allowFullScreen
-              className="w-full h-full"
-            ></iframe>
-          </div>
-        </div>
-      )}
 
       <AIKeyModal
         isOpen={showKeyModal}

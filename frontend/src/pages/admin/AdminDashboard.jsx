@@ -51,30 +51,6 @@ const AdminDashboard = () => {
       stat: counts.agronomists,
       statLabel: 'Total Agronomists',
     },
-    {
-      to: '/admin/facilities',
-      icon: '🏭',
-      title: 'Facilities',
-      description: 'Manage Ginning Mills, Warehouses, and Processing Centers.',
-      gradient: 'from-orange-500 to-red-600',
-      statLabel: 'System Verified',
-    },
-    {
-      to: '/admin/seeds',
-      icon: '🌱',
-      title: 'Seeds',
-      description: 'Manage verified seeds for better yield recommendations.',
-      gradient: 'from-teal-500 to-emerald-600',
-      statLabel: 'Verified Quality',
-    },
-    {
-      to: '/admin/fertilizers',
-      icon: '🧪',
-      title: 'Fertilizers',
-      description: 'Manage verified fertilizers and chemical inputs.',
-      gradient: 'from-purple-500 to-pink-600',
-      statLabel: 'Expert Approved',
-    },
   ];
 
   const quickStats = [

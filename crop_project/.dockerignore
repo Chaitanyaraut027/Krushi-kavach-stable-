@@ -1,0 +1,36 @@
+# Ignore PyTorch model files (we use ONNX versions)
+crop_project/runs/
+crop_project/pretrained_models/*.pth
+crop_project/yolov8s.pt
+crop_project/yolo26n.pt
+crop_project/convert_to_onnx.py
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+.venv/
+venv/
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Node (if any frontend exists)
+node_modules/
+.next/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Docs
+*.md
+!README.md

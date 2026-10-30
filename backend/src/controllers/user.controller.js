@@ -3,7 +3,6 @@ import User from '../models/user.model.js';
 import Media from '../models/media.model.js';
 import { uploadToCloudinary, deleteFromCloudinary } from '../services/cloudinary.service.js';
 import bcrypt from 'bcryptjs';
-// import cloudinary from "../config/cloudinary.js";
 
 const sanitizeUser = (userDoc) => {
   if (!userDoc) return null;
@@ -106,7 +105,6 @@ export const updateLocation = asyncHandler(async (req, res) => {
   });
 });
 
-// --- Upload Profile Picture ---
 // --- Upload/Update Profile Picture ---
 export const uploadProfilePhoto = asyncHandler(async (req, res) => {
   if (!req.file) {

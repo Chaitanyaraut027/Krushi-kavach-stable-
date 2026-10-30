@@ -47,10 +47,12 @@ yarn-error.log*
 /backend/uploads/
 /backend/.env
 /backend/.env.*
+!/backend/.env.example
 
 # Frontend specific
 /frontend/.env
 /frontend/.env.*
+!/frontend/.env.example
 /frontend/node_modules/
 /frontend/dist/
 
@@ -117,3 +119,5 @@ Thumbs.db
 *.pkl
 *.onnx
 *.tflite
+!/crop_project/onnx_models_data/*.onnx
+!/crop_project/onnx_models_data/*.data
