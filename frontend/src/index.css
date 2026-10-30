@@ -1290,3 +1290,34 @@ canvas,
 [data-theme="dark"] .kk-window .bg-white.border-violet-100 {
   background: #ffffff !important;
 }
+
+
+/* ══════════════════════════════════════════════════════════════════════════
+   LEAFLET MAP FIXES (Full Visibility & Responsive Layout)
+══════════════════════════════════════════════════════════════════════════ */
+.leaflet-container {
+  width: 100% !important;
+  height: 100% !important;
+  min-height: 250px;
+  z-index: 1;
+}
+
+/* Prevent Tailwind CSS base img resets from compressing or breaking Leaflet tiles */
+.leaflet-container img,
+.leaflet-pane img,
+img.leaflet-tile {
+  max-width: none !important;
+  max-height: none !important;
+}
+
+.leaflet-tile {
+  visibility: inherit !important;
+}
+
+.kk-map {
+  width: 100%;
+  height: 380px;
+  min-height: 380px;
+  position: relative;
+  z-index: 1;
+}

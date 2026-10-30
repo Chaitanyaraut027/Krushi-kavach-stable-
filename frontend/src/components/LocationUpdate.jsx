@@ -1,5 +1,5 @@
-import { useState, useRef } from 'react';
-import { MapContainer, TileLayer, Marker, useMapEvents, LayersControl } from 'react-leaflet';
+import { useState, useRef, useEffect } from 'react';
+import { MapContainer, TileLayer, Marker, useMapEvents, LayersControl, useMap } from 'react-leaflet';
 import { useNavigate } from 'react-router-dom';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -16,6 +16,22 @@ L.Icon.Default.mergeOptions({
     shadowUrl:
         'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
 });
+
+
+// Invalidate size on mount / tab switch so tiles render fully
+function MapResizeHandler() {
+  const map = useMap();
+  useEffect(() => {
+    map.invalidateSize();
+    const t1 = setTimeout(() => map.invalidateSize(), 150);
+    const t2 = setTimeout(() => map.invalidateSize(), 400);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
+  }, [map]);
+  return null;
+}
 
 // Map click handler
 function MapClickHandler({ onMapClick }) {
@@ -417,6 +433,7 @@ const LocationUpdate = ({ currentLocation, onLocationUpdated }) => {
                         scrollWheelZoom={true}
                         style={{ height: '100%', width: '100%' }}
                     >
+                        <MapResizeHandler />
                         <LayersControl position="topright">
                             <LayersControl.BaseLayer checked name="Standard">
                                 <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />

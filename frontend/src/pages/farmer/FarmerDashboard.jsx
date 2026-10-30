@@ -87,12 +87,36 @@ function useCountUp(target, duration = 1200, active = true) {
   return count;
 }
 
-// ── Map auto-fly to location ──────────────────────────────────────────────
-function MapFlyTo({ center }) {
+// ── Map auto-fly to location & layout resize handler ───────────────────────
+function MapResizeHandler() {
   const map = useMap();
   useEffect(() => {
-    if (center) map.flyTo(center, 11, { animate: true, duration: 1.5 });
-  }, [center, map]);
+    map.invalidateSize();
+    const t1 = setTimeout(() => map.invalidateSize(), 150);
+    const t2 = setTimeout(() => map.invalidateSize(), 400);
+    const t3 = setTimeout(() => map.invalidateSize(), 800);
+    const handleResize = () => map.invalidateSize();
+    window.addEventListener('resize', handleResize);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+      clearTimeout(t3);
+      window.removeEventListener('resize', handleResize);
+    };
+  }, [map]);
+  return null;
+}
+
+function MapFlyTo({ lat, lng }) {
+  const map = useMap();
+  const hasFlown = useRef(false);
+  useEffect(() => {
+    if (lat && lng && !hasFlown.current) {
+      hasFlown.current = true;
+      map.flyTo([lat, lng], 11, { animate: true, duration: 1.2 });
+      map.invalidateSize();
+    }
+  }, [lat, lng, map]);
   return null;
 }
 
@@ -385,15 +409,14 @@ const FarmerDashboard = () => {
                 scrollWheelZoom={false}
                 zoomControl={true}
               >
+                <MapResizeHandler />
                 <TileLayer
-                  attribution='&copy; <a href="https://osm.org/copyright">OpenStreetMap</a>'
-                  url={isDark
-                    ? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
-                    : 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'}
+                  attribution='&copy; <a href="https://osm.org/copyright">OpenStreetMap</a> contributors'
+                  url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
                 />
                 {farmerLat && farmerLng && (
                   <>
-                    <MapFlyTo center={[farmerLat, farmerLng]} />
+                    <MapFlyTo lat={farmerLat} lng={farmerLng} />
                     <Marker position={[farmerLat, farmerLng]} icon={farmerIcon}>
                       <Popup>
                         <div className="p-3 min-w-[160px]">
@@ -417,7 +440,7 @@ const FarmerDashboard = () => {
                   const agLng = ag.location?.coordinates?.[0];
                   if (!agLat || !agLng) return null;
                   return (
-                    <Marker key={ag.id || i} position={[agLat, agLng]} icon={agroIcon}>
+                    <Marker key={ag.id || ag._id || i} position={[agLat, agLng]} icon={agroIcon}>
                       <Popup>
                         <div className="p-3 min-w-[180px]">
                           <p className="font-extrabold text-gray-900 text-sm mb-0.5 flex items-center gap-1.5">
@@ -426,7 +449,7 @@ const FarmerDashboard = () => {
                           <p className="text-xs text-blue-600 font-semibold mb-2">Verified Agronomist</p>
                           {ag.mobileNumber && (
                             <div className="flex gap-2">
-                              <a href={`tel:${agro.mobileNumber}`} className="flex-1 flex items-center justify-center gap-1.5 bg-emerald-600 text-white text-[10px] font-bold py-1.5 rounded-lg">
+                              <a href={`tel:${ag.mobileNumber}`} className="flex-1 flex items-center justify-center gap-1.5 bg-emerald-600 text-white text-[10px] font-bold py-1.5 rounded-lg">
                                 <Zap size={10} /> Call
                               </a>
                               <a href={`https://wa.me/91${ag.mobileNumber}`} target="_blank" rel="noreferrer" className="flex-1 flex items-center justify-center gap-1 bg-[#25D366] text-white text-[10px] font-bold py-1.5 rounded-lg">

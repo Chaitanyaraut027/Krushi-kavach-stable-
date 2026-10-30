@@ -28,6 +28,21 @@ function MapClickHandler({ onMapClick }) {
   return null;
 }
 
+
+function MapResizeHandler() {
+  const map = useMap();
+  useEffect(() => {
+    map.invalidateSize();
+    const t1 = setTimeout(() => map.invalidateSize(), 150);
+    const t2 = setTimeout(() => map.invalidateSize(), 400);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
+  }, [map]);
+  return null;
+}
+
 // Fly map to a position programmatically (used after GPS fix)
 function FlyToLocation({ position }) {
   const map = useMap();
@@ -465,6 +480,7 @@ const Register = () => {
                       scrollWheelZoom={true}
                       style={{ height: "100%", width: "100%" }}
                     >
+                      <MapResizeHandler />
                       <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
 
                       {formData.latitude && formData.longitude && (
