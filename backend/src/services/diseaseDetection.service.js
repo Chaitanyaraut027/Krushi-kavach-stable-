@@ -31,7 +31,7 @@ export const identifyCropWithAI = async (fileBuffer, mimeType) => {
   if (gemini) {
     try {
       console.log("[AI] Attempting identification with Gemini 1.5 Flash Latest...");
-      const model = gemini.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
+      const model = gemini.getGenerativeModel({ model: "gemini-2.5-flash", generationConfig: { responseMimeType: "application/json" } });
       const prompt = `
         Analyze this agricultural image. 
         Note: Ignore any human hands, fingers, or background objects. Focus ONLY on the plant leaf, fruit, or stalk.

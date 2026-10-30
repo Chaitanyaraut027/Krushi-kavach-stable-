@@ -1,3 +1,4 @@
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import OpenAI from "openai";
 import { getWeatherData } from "./weather.service.js";
 import Crop from "../models/crop.model.js";
@@ -6,11 +7,17 @@ import dotenv from "dotenv";
 dotenv.config();
 
 /**
- * AI service - uses Groq's Llama models for advisories.
+ * AI service - generates advisories using Gemini 2.5 Flash with Groq fallback.
  */
-const createClient = () => {
+const createGeminiClient = () => {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) return null;
+  return new GoogleGenerativeAI(apiKey);
+};
+
+const createGroqClient = () => {
   const apiKey = process.env.GROK_API_KEY;
-  if (!apiKey) throw new Error("No Groq API key found in .env");
+  if (!apiKey) return null;
   return new OpenAI({ apiKey, baseURL: "https://api.groq.com/openai/v1" });
 };
 
@@ -47,21 +54,47 @@ export const generateAdvisories = async (user) => {
       ]
     `;
 
-    const client = createClient();
-    const response = await client.chat.completions.create({
-      model: "llama-3.3-70b-versatile",
-      messages: [{ role: "user", content: prompt }],
-      temperature: 0.3,
-      response_format: { type: "json_object" }
-    });
+    // 1. Try Gemini first
+    const gemini = createGeminiClient();
+    if (gemini) {
+      try {
+        const model = gemini.getGenerativeModel({
+          model: "gemini-2.5-flash",
+          generationConfig: { responseMimeType: "application/json" }
+        });
+        const res = await model.generateContent(prompt);
+        const text = res.response.text();
+        const parsed = JSON.parse(text);
+        return Array.isArray(parsed) ? parsed : Object.values(parsed)[0];
+      } catch (geminiErr) {
+        console.warn("[AI Advisory] Gemini failed, attempting Groq fallback:", geminiErr.message);
+      }
+    }
 
-    const content = response.choices[0].message.content;
-    const advisories = JSON.parse(content);
+    // 2. Groq fallback
+    const groq = createGroqClient();
+    if (groq) {
+      const modelsToTry = ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.8-27b", "llama-3.3-70b-versatile"];
+      for (const m of modelsToTry) {
+        try {
+          const response = await groq.chat.completions.create({
+            model: m,
+            messages: [{ role: "user", content: prompt }],
+            temperature: 0.3,
+            response_format: { type: "json_object" }
+          });
+          const content = response.choices[0].message.content;
+          const advisories = JSON.parse(content);
+          return Array.isArray(advisories) ? advisories : Object.values(advisories)[0];
+        } catch (groqErr) {
+          console.warn(`[AI Advisory] Groq model ${m} failed:`, groqErr.message);
+        }
+      }
+    }
 
-    // Handle case where LLM returns object with array inside
-    return Array.isArray(advisories) ? advisories : Object.values(advisories)[0];
+    throw new Error("No AI service available for advisories.");
   } catch (error) {
-    console.error("Error generating Groq advisory:", error.message);
+    console.error("Error generating AI advisory:", error.message);
     return [
       {
         cropName: "System Alert",
