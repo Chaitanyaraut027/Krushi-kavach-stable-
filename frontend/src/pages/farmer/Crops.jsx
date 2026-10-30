@@ -184,13 +184,8 @@ const CropManagement = () => {
     setCropImage('');
     setSaveToast('');
 
-    // Check for User's API Key
-    const userStored = JSON.parse(localStorage.getItem('user'));
-    if (!userStored?.groqApiKey) {
-      setShowKeyModal(true);
-      setGuideLoading(false);
-      return;
-    }
+    // Optional User API key check — platform keys in backend serve as default
+    const userStored = JSON.parse(localStorage.getItem('user') || '{}');
 
     // Fetch image in parallel
     setImageLoading(true);

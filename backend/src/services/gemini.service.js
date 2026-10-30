@@ -70,7 +70,10 @@ export const generateAICompletion = async ({
   maxTokens = 8192,
   userApiKey = null,
 }) => {
-  // 1. Try Gemini
+  // Always allow ample output tokens for Gemini (minimum 8192) so it never truncates JSON
+  const effectiveMaxTokens = Math.max(maxTokens || 0, 8192);
+
+  // 1. Try Gemini 2.5 Flash
   const gemini = createGeminiClient();
   if (gemini) {
     try {
@@ -78,7 +81,7 @@ export const generateAICompletion = async ({
         model: "gemini-2.5-flash",
         generationConfig: {
           temperature,
-          maxOutputTokens: maxTokens,
+          maxOutputTokens: effectiveMaxTokens,
           ...(jsonMode ? { responseMimeType: "application/json" } : {}),
         },
         ...(systemPrompt ? { systemInstruction: systemPrompt } : {}),
@@ -91,27 +94,40 @@ export const generateAICompletion = async ({
     }
   }
 
-  // 2. Groq fallback
-  const groq = createClient(userApiKey);
-  if (groq) {
-    const modelsToTry = ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.8-27b", "llama-3.3-70b-versatile"];
-    for (const model of modelsToTry) {
-      try {
-        const messages = [];
-        if (systemPrompt) messages.push({ role: "system", content: systemPrompt });
-        messages.push({ role: "user", content: prompt });
-        const res = await groq.chat.completions.create({
-          model,
-          messages,
-          temperature,
-          max_tokens: maxTokens,
-          ...(jsonMode ? { response_format: { type: "json_object" } } : {}),
-        });
-        const content = res.choices[0].message.content;
-        return jsonMode ? normalizeAndParseJSON(content) : content;
-      } catch (err) {
-        console.warn(`[AI] Groq model ${model} failed:`, err.message);
+  // 2. Groq fallback with multi-key resiliency
+  const keysToTry = [];
+  if (userApiKey && userApiKey.trim() && userApiKey.startsWith("gsk_")) {
+    keysToTry.push(userApiKey.trim());
+  }
+  if (process.env.GROK_API_KEY && !keysToTry.includes(process.env.GROK_API_KEY)) {
+    keysToTry.push(process.env.GROK_API_KEY);
+  }
+
+  const modelsToTry = ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.8-27b", "llama-3.3-70b-versatile"];
+
+  for (const apiKey of keysToTry) {
+    try {
+      const groq = new OpenAI({ apiKey, baseURL: "https://api.groq.com/openai/v1" });
+      for (const model of modelsToTry) {
+        try {
+          const messages = [];
+          if (systemPrompt) messages.push({ role: "system", content: systemPrompt });
+          messages.push({ role: "user", content: prompt });
+          const res = await groq.chat.completions.create({
+            model,
+            messages,
+            temperature,
+            max_tokens: 3000,
+            ...(jsonMode ? { response_format: { type: "json_object" } } : {}),
+          });
+          const content = res.choices[0].message.content;
+          return jsonMode ? normalizeAndParseJSON(content) : content;
+        } catch (err) {
+          console.warn(`[AI] Groq model ${model} failed with key ${apiKey.slice(0, 10)}...:`, err.message);
+        }
       }
+    } catch (clientErr) {
+      console.warn("[AI] Groq client creation error:", clientErr.message);
     }
   }
 
